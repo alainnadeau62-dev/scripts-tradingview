@@ -1,0 +1,176 @@
+//@version=6
+indicator("Qui domine le marché ? (version simple)", overlay=true, max_labels_count=500)
+
+// =====================================================================
+// IDÉE GÉNÉRALE
+// Quand beaucoup de monde échange en même temps (gros volume) ET que la
+// bougie se termine très haut ou très bas, on peut deviner qui domine :
+// les acheteurs ou les vendeurs. Le script l'écrit en clair sur le graphique.
+// =====================================================================
+
+
+// ---------------------------------------------------------------------
+// 1) RÉGLAGES (modifiables dans les paramètres de l'indicateur)
+// ---------------------------------------------------------------------
+gVol = "Activité"
+volLen  = input.int(20, "Nombre de bougies pour calculer le volume normal", minval=2, group=gVol)
+volMult = input.float(2.0, "Activité 'très forte' à partir de (x le volume normal)", minval=1.0, step=0.1, group=gVol)
+
+gPress = "Qui domine ?"
+pressTh = input.float(0.4, "Force minimale (0.1 = faible, 0.9 = très forte)", minval=0.1, maxval=0.9, step=0.05, group=gPress)
+
+gTrend = "Tendance et excès"
+emaFastL = input.int(20, "Moyenne courte (suit le prix de près)", minval=1, group=gTrend)
+emaSlowL = input.int(50, "Moyenne longue (donne la tendance)", minval=2, group=gTrend)
+rsiLen   = input.int(14, "Période du RSI (mesure l'excès)", minval=2, group=gTrend)
+rsiOB    = input.int(70, "RSI : au-dessus = a beaucoup monté", group=gTrend)
+rsiOS    = input.int(30, "RSI : en dessous = a beaucoup baissé", group=gTrend)
+
+gLvl = "Plus haut / plus bas récents"
+brkLen = input.int(20, "Nombre de bougies regardées", minval=2, group=gLvl)
+
+gShow = "Affichage"
+showLbl    = input.bool(true, "Afficher les bulles d'explication", group=gShow)
+showTbl    = input.bool(true, "Afficher le tableau résumé", group=gShow)
+showLevels = input.bool(true, "Afficher le plus haut et le plus bas récents", group=gShow)
+
+
+// ---------------------------------------------------------------------
+// 2) CALCULS
+// ---------------------------------------------------------------------
+
+// --- Activité : combien de monde échange par rapport à d'habitude ? ---
+volNormal = ta.sma(volume, volLen)                       // volume "habituel"
+volRatio  = volNormal > 0 ? volume / volNormal : 0.0     // ex : 3.0 = trois fois l'habitude
+activiteForte = volRatio >= volMult
+
+// --- Qui domine ? On regarde où la bougie se termine ---
+// Clôture tout en haut de la bougie -> les acheteurs ont gagné la bataille (+1)
+// Clôture tout en bas de la bougie  -> les vendeurs ont gagné la bataille (-1)
+taille = high - low
+force  = taille > 0 ? ((close - low) - (high - close)) / taille : 0.0
+acheteursDominent = force >=  pressTh
+vendeursDominent  = force <= -pressTh
+
+// --- Tendance : le prix est-il au-dessus ou en dessous de sa moyenne longue ? ---
+moyCourte = ta.ema(close, emaFastL)
+moyLongue = ta.ema(close, emaSlowL)
+tendanceHausse = close > moyLongue
+
+// --- Excès : le prix a-t-il trop monté ou trop baissé ? (RSI) ---
+rsi = ta.rsi(close, rsiLen)
+tropMonte   = rsi >= rsiOB
+tropBaisse  = rsi <= rsiOS
+
+// --- Plus haut / plus bas récents (sans compter la bougie actuelle) ---
+plusHaut = ta.highest(high, brkLen)[1]
+plusBas  = ta.lowest(low, brkLen)[1]
+auDessusDuHaut = close > plusHaut
+sousLeBas      = close < plusBas
+
+// --- Signal : forte activité + un camp domine nettement ---
+signalAchat = activiteForte and acheteursDominent
+signalVente = activiteForte and vendeursDominent
+
+
+// ---------------------------------------------------------------------
+// 3) EXPLICATIONS EN FRANÇAIS SIMPLE
+// ---------------------------------------------------------------------
+string explication = ""
+
+if auDessusDuHaut
+    explication += "- Le prix dépasse son plus haut récent\n"
+if sousLeBas
+    explication += "- Le prix passe sous son plus bas récent\n"
+if tropMonte
+    explication += "- Le prix a beaucoup monté (repli possible)\n"
+if tropBaisse
+    explication += "- Le prix a beaucoup baissé (rebond possible)\n"
+
+if signalAchat and tendanceHausse
+    explication += "- Dans le sens de la tendance (hausse)\n"
+if signalAchat and not tendanceHausse
+    explication += "- Contre la tendance : rebond possible\n"
+if signalVente and not tendanceHausse
+    explication += "- Dans le sens de la tendance (baisse)\n"
+if signalVente and tendanceHausse
+    explication += "- Contre la tendance : prises de profits possibles\n"
+
+
+// ---------------------------------------------------------------------
+// 4) DESSIN SUR LE GRAPHIQUE
+// ---------------------------------------------------------------------
+plot(moyCourte, "Moyenne courte", color=color.new(color.blue, 0))
+plot(moyLongue, "Moyenne longue", color=color.new(color.orange, 0))
+
+plot(showLevels ? plusHaut : na, "Plus haut récent", color=color.new(color.red, 60), style=plot.style_linebr)
+plot(showLevels ? plusBas  : na, "Plus bas récent",  color=color.new(color.green, 60), style=plot.style_linebr)
+
+// Fond gris = beaucoup d'activité sur cette bougie
+bgcolor(activiteForte ? color.new(color.gray, 85) : na, title="Forte activité")
+
+// Bulle d'explication
+if showLbl and (signalAchat or signalVente)
+    titre = signalAchat ? "LES ACHETEURS DOMINENT" : "LES VENDEURS DOMINENT"
+    texte = titre + "\nActivité : " + str.tostring(volRatio, "#.0") + " fois la normale\n" + explication
+    label.new(
+         bar_index,
+         signalAchat ? low : high,
+         texte,
+         style     = signalAchat ? label.style_label_up : label.style_label_down,
+         color     = signalAchat ? color.new(color.green, 20) : color.new(color.red, 20),
+         textcolor = color.white,
+         size      = size.small)
+
+
+// ---------------------------------------------------------------------
+// 5) TABLEAU RÉSUMÉ (dernière bougie)
+// ---------------------------------------------------------------------
+var table tableau = table.new(position.top_right, 2, 7, border_width=1)
+
+if showTbl and barstate.islast
+    // Textes simples pour chaque ligne
+    activiteTxt = volRatio >= volMult ? "Très forte" : volRatio >= 1.3 ? "Un peu élevée" : "Normale"
+    activiteCol = volRatio >= volMult ? color.orange : color.gray
+
+    dominantTxt = acheteursDominent ? "Les acheteurs" : vendeursDominent ? "Les vendeurs" : "Personne"
+    dominantCol = acheteursDominent ? color.green : vendeursDominent ? color.red : color.gray
+
+    tendanceTxt = tendanceHausse ? "Vers le haut" : "Vers le bas"
+    tendanceCol = tendanceHausse ? color.green : color.red
+
+    exces = tropMonte ? "A beaucoup monté" : tropBaisse ? "A beaucoup baissé" : "Normal"
+    excesCol = tropMonte ? color.red : tropBaisse ? color.green : color.gray
+
+    position = auDessusDuHaut ? "Au-dessus du plus haut récent" : sousLeBas ? "Sous le plus bas récent" : "Dans sa zone habituelle"
+
+    verdict = signalAchat ? "Les acheteurs prennent le contrôle" : signalVente ? "Les vendeurs prennent le contrôle" : "Rien d'inhabituel"
+    verdictCol = signalAchat ? color.green : signalVente ? color.red : color.gray
+
+    tableau.cell(0, 0, "Question", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    tableau.cell(1, 0, "Réponse",  text_color=color.white, bgcolor=color.new(color.gray, 30))
+
+    tableau.cell(0, 1, "Y a-t-il beaucoup d'échanges ?")
+    tableau.cell(1, 1, activiteTxt + " (" + str.tostring(volRatio, "#.0") + "x)", text_color=activiteCol)
+
+    tableau.cell(0, 2, "Qui domine cette bougie ?")
+    tableau.cell(1, 2, dominantTxt, text_color=dominantCol)
+
+    tableau.cell(0, 3, "Quelle direction générale ?")
+    tableau.cell(1, 3, tendanceTxt, text_color=tendanceCol)
+
+    tableau.cell(0, 4, "Le prix a-t-il trop bougé ?")
+    tableau.cell(1, 4, exces + " (RSI " + str.tostring(rsi, "#") + ")", text_color=excesCol)
+
+    tableau.cell(0, 5, "Où est le prix ?")
+    tableau.cell(1, 5, position)
+
+    tableau.cell(0, 6, "En résumé", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    tableau.cell(1, 6, verdict, text_color=color.white, bgcolor=color.new(verdictCol, 30))
+
+
+// ---------------------------------------------------------------------
+// 6) ALERTES (à activer dans TradingView : clic droit > Ajouter une alerte)
+// ---------------------------------------------------------------------
+alertcondition(signalAchat, "Les acheteurs dominent", "Forte activité : les acheteurs prennent le contrôle")
+alertcondition(signalVente, "Les vendeurs dominent", "Forte activité : les vendeurs prennent le contrôle")
